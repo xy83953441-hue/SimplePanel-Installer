@@ -5,22 +5,22 @@
 # GitHub: https://github.com/XY83953441-Hue/SimplePanel-Installer
 # =================================================
 
-set -euo pipefail  # 严格模式
+set -e  # 严格模式，但移除 -u 避免未绑定变量错误
 
 # 颜色定义
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly NC='\033[0m' # No Color
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
 
 # 全局配置
-readonly GITHUB_USER="XY83953441-Hue"
-readonly GITHUB_REPO="SimplePanel"
-readonly INSTALL_DIR="/usr/local/simple-panel"
-readonly CONFIG_DIR="/etc/simple-panel"
-readonly SERVICE_NAME="simple-panel"
+GITHUB_USER="XY83953441-Hue"
+GITHUB_REPO="SimplePanel"
+INSTALL_DIR="/usr/local/simple-panel"
+CONFIG_DIR="/etc/simple-panel"
+SERVICE_NAME="simple-panel"
 
 # 日志函数
 log() {
@@ -47,13 +47,22 @@ success() {
 show_banner() {
     clear
     echo -e "${CYAN}"
-    cat << 'EOF'
-╔════════════════════════════════════════════════╗
-║                SimplePanel 安装程序            ║
-║                简单 • 快速 • 稳定              ║
-╚════════════════════════════════════════════════╝
-EOF
+    echo "╔════════════════════════════════════════════════╗"
+    echo "║                SimplePanel 安装程序            ║"
+    echo "║                简单 • 快速 • 稳定              ║"
+    echo "╚════════════════════════════════════════════════╝"
     echo -e "${NC}"
+}
+
+# 从终端读取输入（修复管道执行问题）
+safe_read() {
+    if [ -t 0 ]; then
+        # 直接运行，使用正常读取
+        read "$@"
+    else
+        # 管道执行，从 /dev/tty 读取
+        read "$@" < /dev/tty
+    fi
 }
 
 # 确认操作
@@ -68,7 +77,8 @@ confirm_action() {
         prompt="${prompt} [y/N]"
     fi
     
-    read -rp "$(info "$prompt") " confirm
+    echo -e "${BLUE}[信息]${NC} $prompt"
+    safe_read -p "请输入选择: " confirm
     
     if [[ "$default" == "Y" ]]; then
         [[ "$confirm" =~ ^[Nn]$ ]] && exit 0
@@ -81,7 +91,7 @@ confirm_action() {
 generate_random_string() {
     local length="$1"
     local charset="${2:-a-zA-Z0-9}"
-    tr -dc "$charset" < /dev/urandom | head -c "$length"
+    tr -dc "$charset" < /dev/urandom | head -c "$length" 2>/dev/null || echo "default${length}"
 }
 
 # 检查命令是否存在
@@ -92,11 +102,6 @@ command_exists() {
 # 检查文件是否存在
 file_exists() {
     [[ -f "$1" ]]
-}
-
-# 检查目录是否存在
-dir_exists() {
-    [[ -d "$1" ]]
 }
 
 # 显示帮助信息
@@ -122,31 +127,6 @@ show_help() {
 EOF
 }
 
-# 显示交互菜单
-show_interactive_menu() {
-    show_banner
-    cat << EOF
-请选择操作:
-
-  1) 安装 SimplePanel
-  2) 更新 SimplePanel  
-  3) 卸载 SimplePanel
-  4) 查看服务状态
-  5) 退出
-
-EOF
-    read -rp "$(info "请输入选择 (1-5): ")" choice
-    
-    case "$choice" in
-        1) main_install ;;
-        2) main_update ;;
-        3) main_uninstall ;;
-        4) show_service_status ;;
-        5) exit 0 ;;
-        *) error "无效选择" && exit 1 ;;
-    esac
-}
-
 # 系统信息
 OS=""
 OS_VERSION=""
@@ -168,18 +148,6 @@ detect_system() {
     fi
     
     # 架构检测
-    detect_architecture
-    
-    # 包管理器检测
-    detect_package_manager
-    
-    info "操作系统: $OS $OS_VERSION"
-    info "系统架构: $ARCH"
-    info "包管理器: $PACKAGE_MANAGER"
-}
-
-# 检测系统架构
-detect_architecture() {
     local machine_arch
     machine_arch=$(uname -m)
     
@@ -193,10 +161,8 @@ detect_architecture() {
             exit 1
             ;;
     esac
-}
-
-# 检测包管理器
-detect_package_manager() {
+    
+    # 包管理器检测
     if command_exists "apt"; then
         PACKAGE_MANAGER="apt"
     elif command_exists "yum"; then
@@ -211,126 +177,71 @@ detect_package_manager() {
         error "未找到支持的包管理器"
         exit 1
     fi
+    
+    info "操作系统: $OS $OS_VERSION"
+    info "系统架构: $ARCH"
+    info "包管理器: $PACKAGE_MANAGER"
 }
 
 # 预检检查
 run_preflight_checks() {
     info "运行预检检查..."
     
-    check_root_privilege
-    check_internet_connection
-    detect_system
-    check_system_compatibility
-}
-
-# 检查root权限
-check_root_privilege() {
+    # 检查root权限
     if [[ $EUID -ne 0 ]]; then
         error "请使用 root 权限运行此脚本"
-        info "可以使用: sudo bash $0"
+        echo "可以使用: sudo bash $0"
         exit 1
     fi
-}
-
-# 检查网络连接
-check_internet_connection() {
+    
+    # 检查网络连接
     if ! curl -s --connect-timeout 10 -I https://github.com > /dev/null; then
         error "网络连接失败，请检查网络设置"
         exit 1
     fi
-}
-
-# 检查系统兼容性
-check_system_compatibility() {
-    case "$OS" in
-        ubuntu)
-            if [[ "$OS_VERSION" < "18.04" ]]; then
-                warn "Ubuntu 版本过低，建议使用 18.04 或更高版本"
-            fi
-            ;;
-        debian)
-            if [[ "$OS_VERSION" < "10" ]]; then
-                warn "Debian 版本过低，建议使用 10 或更高版本"
-            fi
-            ;;
-        centos|rhel)
-            if [[ "$OS_VERSION" < "8" ]]; then
-                warn "CentOS/RHEL 版本过低，建议使用 8 或更高版本"
-            fi
-            ;;
-        *)
-            warn "未经充分测试的操作系统: $OS"
-            ;;
-    esac
+    
+    detect_system
 }
 
 # 安装系统依赖
 install_dependencies() {
     info "安装系统依赖..."
     
-    local packages=("curl" "wget" "tar" "sudo")
-    
     case "$PACKAGE_MANAGER" in
         apt)
-            apt update && apt install -y "${packages[@]}"
+            apt update && apt install -y curl wget tar sudo
             ;;
         yum)
-            yum install -y "${packages[@]}"
+            yum install -y curl wget tar sudo
             ;;
         dnf)
-            dnf install -y "${packages[@]}"
+            dnf install -y curl wget tar sudo
             ;;
         apk)
-            apk update && apk add "${packages[@]}"
+            apk update && apk add curl wget tar sudo
             ;;
         pacman)
-            pacman -Sy && pacman -S --noconfirm "${packages[@]}"
+            pacman -Sy && pacman -S --noconfirm curl wget tar sudo
             ;;
     esac
-    
-    # 检查是否安装成功
-    for pkg in "${packages[@]}"; do
-        if ! command_exists "$pkg"; then
-            warn "依赖 $pkg 安装失败，继续安装..."
-        fi
-    done
 }
 
 # 获取最新版本
 get_latest_version() {
     info "获取最新版本..."
     
-    local api_urls=(
-        "https://api.github.com/repos/$GITHUB_USER/$GITHUB_REPO/releases/latest"
-        "https://ghproxy.com/https://api.github.com/repos/$GITHUB_USER/$GITHUB_REPO/releases/latest"
-    )
+    local version
+    # 尝试直接获取版本
+    version=$(curl -s --connect-timeout 10 "https://api.github.com/repos/$GITHUB_USER/$GITHUB_REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null || true)
     
-    for api_url in "${api_urls[@]}"; do
-        local version
-        if command_exists "jq"; then
-            version=$(curl -s --connect-timeout 10 "$api_url" | jq -r '.tag_name' 2>/dev/null)
-        else
-            version=$(curl -s --connect-timeout 10 "$api_url" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null)
-        fi
-        
-        if [[ -n "$version" && "$version" != "null" ]]; then
-            info "最新版本: $version"
-            echo "$version"
-            return 0
-        fi
-    done
+    if [[ -n "$version" && "$version" != "null" ]]; then
+        info "最新版本: $version"
+        echo "$version"
+        return 0
+    fi
     
     warn "无法从GitHub获取最新版本，使用默认版本 v1.0.0"
     echo "v1.0.0"
-}
-
-# 获取当前版本
-get_current_version() {
-    if file_exists "$INSTALL_DIR/version.txt"; then
-        cat "$INSTALL_DIR/version.txt"
-    else
-        echo "未知"
-    fi
 }
 
 # 下载面板程序
@@ -339,25 +250,19 @@ download_panel() {
     info "下载 SimplePanel $version..."
     
     local download_url="https://github.com/$GITHUB_USER/$GITHUB_REPO/releases/download/$version/simple-panel-linux-$ARCH.tar.gz"
-    local temp_file="/tmp/simple-panel-$$.tar.gz"
+    local temp_file="/tmp/simple-panel.tar.gz"
     
     info "下载地址: $download_url"
     
     # 下载文件
-    if ! curl -fsSL -o "$temp_file" "$download_url"; then
+    if ! wget -q --show-progress -O "$temp_file" "$download_url"; then
         error "下载失败: $download_url"
-        error "请检查:"
-        error "  1. 网络连接"
-        error "  2. 版本是否存在" 
-        error "  3. GitHub 访问权限"
-        exit 1
-    fi
-    
-    # 检查文件大小
-    local file_size
-    file_size=$(stat -c%s "$temp_file" 2>/dev/null || stat -f%z "$temp_file" 2>/dev/null || echo "0")
-    if [[ "$file_size" -lt 1024 ]]; then
-        error "下载的文件大小异常，可能下载失败"
+        error "这可能是因为:"
+        error "  1. 网络连接问题"
+        error "  2. 该版本不存在" 
+        error "  3. GitHub 访问限制"
+        error ""
+        error "请确保您已经在 GitHub 上创建了相应的发布版本"
         exit 1
     fi
     
@@ -373,37 +278,10 @@ download_panel() {
     # 设置执行权限
     chmod +x "$INSTALL_DIR/simple-panel" 2>/dev/null || true
     
-    # 保存版本信息
-    echo "$version" > "$INSTALL_DIR/version.txt"
-    
     # 清理临时文件
     rm -f "$temp_file"
     
     success "面板程序下载完成"
-}
-
-# 获取服务器IP
-get_server_ip() {
-    info "获取服务器IP地址..."
-    
-    local ipv4 ipv6
-    
-    ipv4=$(curl -s4 --connect-timeout 5 ip.sb 2>/dev/null || 
-           curl -s4 --connect-timeout 5 icanhazip.com 2>/dev/null || 
-           echo "无法获取")
-    
-    ipv6=$(curl -s6 --connect-timeout 5 ip.sb 2>/dev/null || 
-           curl -s6 --connect-timeout 5 icanhazip.com 2>/dev/null || 
-           echo "无法获取")
-    
-    echo "------------------------------------------"
-    if [[ "$ipv4" != "无法获取" ]]; then
-        info "IPv4 地址: $ipv4"
-    fi
-    if [[ "$ipv6" != "无法获取" ]]; then
-        info "IPv6 地址: $ipv6"
-    fi
-    echo "------------------------------------------"
 }
 
 # 生成随机配置
@@ -439,14 +317,6 @@ log:
 EOF
 
     # 保存安装信息
-    save_installation_info "$panel_port" "$username" "$password" "$secret_path"
-    success "配置文件生成完成"
-}
-
-# 保存安装信息
-save_installation_info() {
-    local port="$1" username="$2" password="$3" path="$4"
-    
     cat > "/root/simple-panel-info.txt" << EOF
 ==========================================
       SimplePanel 安装信息
@@ -454,7 +324,7 @@ save_installation_info() {
 
 面板访问信息：
 ------------------------------------------
-面板地址: http://你的服务器IP:${port}${path}
+面板地址: http://你的服务器IP:${panel_port}${secret_path}
 用户名: $username
 密码: $password
 ------------------------------------------
@@ -479,6 +349,8 @@ save_installation_info() {
 安装时间: $(date)
 ==========================================
 EOF
+
+    success "配置文件生成完成"
 }
 
 # 配置系统服务
@@ -494,7 +366,6 @@ setup_system_service() {
     cat > "/etc/systemd/system/$SERVICE_NAME.service" << EOF
 [Unit]
 Description=SimplePanel Service
-Description=轻量级代理面板管理系统
 After=network.target
 
 [Service]
@@ -504,7 +375,6 @@ WorkingDirectory=$INSTALL_DIR
 ExecStart=$INSTALL_DIR/simple-panel --config $CONFIG_DIR/config.yaml
 Restart=on-failure
 RestartSec=5s
-LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
@@ -537,48 +407,21 @@ configure_firewall() {
     fi
     
     # 尝试配置不同防火墙
-    if configure_ufw "$panel_port" || \
-       configure_firewalld "$panel_port" || \
-       configure_iptables "$panel_port"; then
-        success "防火墙配置完成"
-    else
-        warn "无法自动配置防火墙，请手动开放端口: $panel_port"
-    fi
-}
-
-# 配置UFW
-configure_ufw() {
-    local port="$1"
     if command_exists "ufw" && ufw status | grep -q "active"; then
-        ufw allow "$port/tcp"
-        info "UFW 防火墙已开放端口: $port"
-        return 0
-    fi
-    return 1
-}
-
-# 配置Firewalld
-configure_firewalld() {
-    local port="$1"
-    if command_exists "firewall-cmd" && systemctl is-active --quiet firewalld; then
-        firewall-cmd --permanent --add-port="$port/tcp"
+        ufw allow "$panel_port/tcp"
+        info "UFW 防火墙已开放端口: $panel_port"
+    elif command_exists "firewall-cmd" && systemctl is-active --quiet firewalld; then
+        firewall-cmd --permanent --add-port="$panel_port/tcp"
         firewall-cmd --reload
-        info "Firewalld 防火墙已开放端口: $port"
-        return 0
-    fi
-    return 1
-}
-
-# 配置iptables
-configure_iptables() {
-    local port="$1"
-    if command_exists "iptables"; then
-        iptables -I INPUT -p tcp --dport "$port" -j ACCEPT
-        info "iptables 已开放端口: $port"
+        info "Firewalld 防火墙已开放端口: $panel_port"
+    elif command_exists "iptables"; then
+        iptables -I INPUT -p tcp --dport "$panel_port" -j ACCEPT
+        info "iptables 已开放端口: $panel_port"
         warn "请手动保存 iptables 规则"
-        return 0
+    else
+        warn "未检测到防火墙，或使用其他防火墙系统"
+        info "请确保端口 $panel_port 已开放"
     fi
-    return 1
 }
 
 # 启动服务
@@ -602,22 +445,28 @@ start_service() {
     fi
 }
 
-# 停止服务
-stop_service() {
-    if command_exists "systemctl"; then
-        if systemctl stop "$SERVICE_NAME" 2>/dev/null; then
-            info "服务已停止"
-        fi
+# 获取服务器IP
+get_server_ip() {
+    info "获取服务器IP地址..."
+    
+    local ipv4 ipv6
+    
+    ipv4=$(curl -s4 --connect-timeout 5 ip.sb 2>/dev/null || 
+           curl -s4 --connect-timeout 5 icanhazip.com 2>/dev/null || 
+           echo "无法获取")
+    
+    ipv6=$(curl -s6 --connect-timeout 5 ip.sb 2>/dev/null || 
+           curl -s6 --connect-timeout 5 icanhazip.com 2>/dev/null || 
+           echo "无法获取")
+    
+    echo "------------------------------------------"
+    if [[ "$ipv4" != "无法获取" ]]; then
+        info "IPv4 地址: $ipv4"
     fi
-}
-
-# 显示服务状态
-show_service_status() {
-    if command_exists "systemctl"; then
-        systemctl status "$SERVICE_NAME"
-    else
-        info "系统不支持 systemd"
+    if [[ "$ipv6" != "无法获取" ]]; then
+        info "IPv6 地址: $ipv6"
     fi
+    echo "------------------------------------------"
 }
 
 # 显示安装结果
@@ -654,54 +503,6 @@ show_installation_result() {
     info "安装信息已保存至: /root/simple-panel-info.txt"
 }
 
-# 备份数据
-backup_data() {
-    if file_exists "$INSTALL_DIR/data.db"; then
-        local backup_file="/tmp/simple-panel-backup-$(date +%Y%m%d-%H%M%S).db"
-        cp "$INSTALL_DIR/data.db" "$backup_file"
-        info "数据已备份到: $backup_file"
-    fi
-}
-
-# 恢复数据
-restore_data() {
-    local backup_file
-    backup_file=$(ls -t /tmp/simple-panel-backup-*.db 2>/dev/null | head -1)
-    if [[ -n "$backup_file" && -f "$backup_file" ]]; then
-        cp "$backup_file" "$INSTALL_DIR/data.db"
-        info "数据已从备份恢复: $backup_file"
-    fi
-}
-
-# 移除系统服务
-remove_system_service() {
-    if command_exists "systemctl"; then
-        systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-        rm -f "/etc/systemd/system/$SERVICE_NAME.service"
-        systemctl daemon-reload 2>/dev/null || true
-        info "系统服务已移除"
-    fi
-}
-
-# 移除安装文件
-remove_installation_files() {
-    rm -rf "$INSTALL_DIR"
-    info "程序文件已移除"
-}
-
-# 移除配置文件
-remove_config_files() {
-    rm -rf "$CONFIG_DIR"
-    info "配置文件已移除"
-}
-
-# 清理残留文件
-cleanup_residual_files() {
-    rm -f "/root/simple-panel-info.txt"
-    rm -f "/var/log/simple-panel.log" 2>/dev/null || true
-    info "残留文件已清理"
-}
-
 # 主安装流程
 main_install() {
     show_banner
@@ -725,47 +526,36 @@ main_install() {
     log "安装完成！"
 }
 
-# 卸载流程
-main_uninstall() {
+# 显示交互菜单
+show_interactive_menu() {
     show_banner
-    confirm_action "卸载 SimplePanel"
+    echo "请选择操作:"
+    echo ""
+    echo "  1) 安装 SimplePanel"
+    echo "  2) 更新 SimplePanel"  
+    echo "  3) 卸载 SimplePanel"
+    echo "  4) 退出"
+    echo ""
     
-    log "开始卸载..."
+    echo -e "${BLUE}[信息]${NC} 请输入选择 (1-4): "
+    safe_read -p ">" choice
     
-    stop_service
-    remove_system_service
-    remove_installation_files
-    remove_config_files
-    cleanup_residual_files
-    
-    success "SimplePanel 已完全卸载"
-}
-
-# 更新流程
-main_update() {
-    show_banner
-    log "检查更新..."
-    
-    local current_version
-    current_version=$(get_current_version)
-    local latest_version
-    latest_version=$(get_latest_version)
-    
-    if [[ "$current_version" == "$latest_version" ]]; then
-        success "已经是最新版本: $latest_version"
-        return 0
-    fi
-    
-    confirm_action "更新到版本 $latest_version"
-    
-    log "开始更新..."
-    backup_data
-    stop_service
-    download_panel "$latest_version"
-    restore_data
-    start_service
-    
-    success "更新完成: $current_version → $latest_version"
+    case "$choice" in
+        1) main_install ;;
+        2) 
+            warn "更新功能暂未实现"
+            exit 0 
+            ;;
+        3) 
+            warn "卸载功能暂未实现" 
+            exit 0
+            ;;
+        4) exit 0 ;;
+        *) 
+            error "无效选择: $choice"
+            exit 1 
+            ;;
+    esac
 }
 
 # 主程序入口
@@ -777,13 +567,10 @@ main() {
             main_install
             ;;
         uninstall)
-            main_uninstall
+            warn "卸载功能暂未实现"
             ;;
         update)
-            main_update
-            ;;
-        status)
-            show_service_status
+            warn "更新功能暂未实现"
             ;;
         help|--help|-h)
             show_help
@@ -794,12 +581,12 @@ main() {
     esac
 }
 
-# 修复管道执行问题：检查是否通过管道执行
-if [[ -t 0 ]]; then
-    # 直接执行
-    main "$@"
+# 检查是否通过管道执行，如果是则自动选择安装
+if [[ ! -t 0 ]]; then
+    # 通过管道执行，自动选择安装
+    log "检测到通过管道执行，开始自动安装..."
+    main_install
 else
-    # 通过管道执行，移除严格模式中的 -u 选项以避免未绑定变量错误
-    set -eo pipefail
+    # 直接执行，显示菜单
     main "$@"
 fi
