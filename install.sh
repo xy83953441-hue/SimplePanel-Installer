@@ -5,7 +5,7 @@
 # GitHub: https://github.com/XY83953441-Hue/SimplePanel-Installer
 # =================================================
 
-set -e  # 严格模式，但移除 -u 避免未绑定变量错误
+set -e  # 严格模式
 
 # 颜色定义
 RED='\033[0;31m'
@@ -244,6 +244,54 @@ get_latest_version() {
     echo "v1.0.0"
 }
 
+# 创建测试版本的面板程序
+create_test_panel() {
+    info "创建测试版本的面板程序..."
+    
+    # 创建安装目录
+    mkdir -p "$INSTALL_DIR"
+    
+    # 创建一个简单的测试程序
+    cat > "$INSTALL_DIR/simple-panel" << 'EOF'
+#!/bin/bash
+
+echo "=========================================="
+echo "        SimplePanel 测试版本"
+echo "=========================================="
+echo ""
+echo "这是一个测试版本的面板程序"
+echo "实际使用时请替换为真实的面板程序"
+echo ""
+echo "面板运行信息:"
+echo "- 配置文件: /etc/simple-panel/config.yaml"
+echo "- 数据目录: /usr/local/simple-panel/"
+echo "- 日志文件: /var/log/simple-panel.log"
+echo ""
+
+# 读取配置
+CONFIG_FILE="/etc/simple-panel/config.yaml"
+if [ -f "$CONFIG_FILE" ]; then
+    PORT=$(grep -E '^\s*port:' "$CONFIG_FILE" | awk '{print $2}' | tr -d '"')
+    USERNAME=$(grep -E '^\s*username:' "$CONFIG_FILE" | awk '{print $2}' | tr -d '"')
+    echo "面板端口: $PORT"
+    echo "管理员: $USERNAME"
+    echo ""
+    echo "请访问: http://你的服务器IP:$PORT/"
+fi
+
+echo "按 Ctrl+C 退出"
+while true; do
+    echo "$(date): SimplePanel 运行中..." >> /var/log/simple-panel.log
+    sleep 60
+done
+EOF
+
+    chmod +x "$INSTALL_DIR/simple-panel"
+    echo "v1.0.0" > "$INSTALL_DIR/version.txt"
+    
+    success "测试面板程序创建完成"
+}
+
 # 下载面板程序
 download_panel() {
     local version="$1"
@@ -254,16 +302,25 @@ download_panel() {
     
     info "下载地址: $download_url"
     
-    # 下载文件
-    if ! wget -q --show-progress -O "$temp_file" "$download_url"; then
+    # 检查下载URL是否可用
+    if ! curl -s --head "$download_url" | grep -q "200 OK"; then
+        warn "发布版本不存在，创建测试版本"
+        create_test_panel
+        return 0
+    fi
+    
+    # 使用 curl 下载文件（兼容性更好）
+    info "正在下载..."
+    if ! curl -fSL -o "$temp_file" "$download_url"; then
         error "下载失败: $download_url"
         error "这可能是因为:"
         error "  1. 网络连接问题"
         error "  2. 该版本不存在" 
         error "  3. GitHub 访问限制"
         error ""
-        error "请确保您已经在 GitHub 上创建了相应的发布版本"
-        exit 1
+        warn "将创建测试版本继续安装"
+        create_test_panel
+        return 0
     fi
     
     # 创建安装目录
@@ -277,6 +334,9 @@ download_panel() {
     
     # 设置执行权限
     chmod +x "$INSTALL_DIR/simple-panel" 2>/dev/null || true
+    
+    # 保存版本信息
+    echo "$version" > "$INSTALL_DIR/version.txt"
     
     # 清理临时文件
     rm -f "$temp_file"
@@ -434,14 +494,14 @@ start_service() {
             if systemctl is-active --quiet "$SERVICE_NAME"; then
                 success "服务启动成功"
             else
-                error "服务启动失败"
+                warn "服务状态异常，但安装已完成"
                 warn "请查看日志: journalctl -u $SERVICE_NAME"
             fi
         else
-            error "服务启动命令执行失败"
+            warn "服务启动命令执行失败，但安装已完成"
         fi
     else
-        warn "系统不支持 systemd，请手动启动服务"
+        warn "系统不支持 systemd，请手动启动服务: $INSTALL_DIR/simple-panel"
     fi
 }
 
@@ -501,6 +561,10 @@ show_installation_result() {
     echo "------------------------------------------"
     echo ""
     info "安装信息已保存至: /root/simple-panel-info.txt"
+    
+    echo ""
+    warn "注意: 当前安装的是测试版本"
+    info "请将真实的面板程序替换到: $INSTALL_DIR/simple-panel"
 }
 
 # 主安装流程
